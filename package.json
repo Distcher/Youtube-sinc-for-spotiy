@@ -1,0 +1,28 @@
+{
+  "name": "yt-spotify-sync-desktop",
+  "version": "1.0.0",
+  "description": "App de desktop que sincroniza músicas tocadas no YouTube com uma playlist do Spotify.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.example.ytspotifysync",
+    "productName": "YT Spotify Sync",
+    "files": [
+      "main.js",
+      "preload.js",
+      "app/**/*"
+    ],
+    "win": { "target": "nsis" },
+    "mac": { "target": "dmg" },
+    "linux": { "target": "AppImage" }
+  }
+}

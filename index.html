@@ -1,0 +1,1077 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>YT→Spotify Sync</title>
+<style>
+  /* ============================================================
+     DESIGN TOKENS
+     Paleta: fundo neutro, verde Spotify (#1DB954) para "ativo",
+     vermelho suave para "erro/parado", tudo com suporte a
+     tema claro/escuro via prefers-color-scheme + classe manual.
+     ============================================================ */
+  :root{
+    --bg:#f5f6f8;
+    --surface:#ffffff;
+    --surface-2:#eef0f3;
+    --text:#16181c;
+    --text-dim:#5b626e;
+    --border:#dfe3e8;
+    --accent:#1DB954;
+    --accent-dim:#179c46;
+    --danger:#e5484d;
+    --danger-dim:#c53d41;
+    --warn:#f5a623;
+    --yt:#ff0033;
+    --shadow:0 10px 30px rgba(20,20,30,.12);
+    --radius:16px;
+    --font-display:'Segoe UI',ui-sans-serif,system-ui,sans-serif;
+    --font-mono:'SFMono-Regular',Consolas,monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#0d0f12;
+      --surface:#16181c;
+      --surface-2:#1d2025;
+      --text:#eef1f4;
+      --text-dim:#9aa1ab;
+      --border:#2a2e34;
+      --shadow:0 10px 30px rgba(0,0,0,.5);
+    }
+  }
+  html[data-theme="light"]{
+    --bg:#f5f6f8;--surface:#fff;--surface-2:#eef0f3;--text:#16181c;
+    --text-dim:#5b626e;--border:#dfe3e8;--shadow:0 10px 30px rgba(20,20,30,.12);
+  }
+  html[data-theme="dark"]{
+    --bg:#0d0f12;--surface:#16181c;--surface-2:#1d2025;--text:#eef1f4;
+    --text-dim:#9aa1ab;--border:#2a2e34;--shadow:0 10px 30px rgba(0,0,0,.5);
+  }
+
+  *{box-sizing:border-box;}
+  body{
+    margin:0;font-family:var(--font-display);background:var(--bg);color:var(--text);
+    min-height:100vh;transition:background .3s ease,color .3s ease;
+  }
+
+  /* ---------- Page shell (mock host page, so the overlay has context) ---------- */
+  .host{
+    max-width:760px;margin:0 auto;padding:64px 24px 160px;
+  }
+  .host h1{font-size:28px;letter-spacing:-.02em;margin-bottom:4px;}
+  .host p.lede{color:var(--text-dim);margin-top:0;line-height:1.6;}
+  .card{
+    background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+    padding:20px 22px;margin-top:18px;box-shadow:var(--shadow);
+  }
+  .card h2{font-size:15px;text-transform:uppercase;letter-spacing:.08em;color:var(--text-dim);margin:0 0 12px;}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
+  label{font-size:13px;color:var(--text-dim);display:block;margin-bottom:6px;}
+  input[type=text],input[type=password],select{
+    width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--border);
+    background:var(--surface-2);color:var(--text);font-size:14px;outline:none;
+  }
+  input:focus,select:focus{border-color:var(--accent);}
+  button{
+    font-family:inherit;cursor:pointer;border:none;border-radius:10px;padding:10px 16px;
+    font-size:14px;font-weight:600;transition:transform .15s ease, opacity .15s ease, background .15s;
+  }
+  button:active{transform:scale(.97);}
+  button.primary{background:var(--accent);color:#06210f;}
+  button.primary:hover{background:var(--accent-dim);}
+  button.ghost{background:var(--surface-2);color:var(--text);border:1px solid var(--border);}
+  button.ghost:hover{background:var(--border);}
+  button.danger{background:var(--danger);color:#fff;}
+  button:disabled{opacity:.45;cursor:not-allowed;}
+
+  .pill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600;}
+  .pill.ok{background:rgba(29,185,84,.15);color:var(--accent);}
+  .pill.bad{background:rgba(229,72,77,.15);color:var(--danger);}
+  .pill.idle{background:var(--surface-2);color:var(--text-dim);}
+
+  /* ---------- Demo "now playing" simulator ---------- */
+  .yt-mock{
+    display:flex;gap:14px;align-items:center;background:var(--surface-2);border-radius:12px;padding:12px;
+  }
+  .yt-thumb{width:64px;height:64px;border-radius:8px;background:linear-gradient(135deg,var(--yt),#8a0021);
+    flex-shrink:0;display:flex;align-items:center;justify-content:center;color:#fff;font-size:22px;}
+  .yt-meta{flex:1;min-width:0;}
+  .yt-meta .title{font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .yt-meta .channel{font-size:12px;color:var(--text-dim);}
+
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--border);}
+  th{color:var(--text-dim);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.06em;}
+  tr:last-child td{border-bottom:none;}
+  .muted{color:var(--text-dim);font-size:12px;}
+  .log{max-height:160px;overflow-y:auto;font-family:var(--font-mono);font-size:12px;color:var(--text-dim);
+    background:var(--surface-2);border-radius:10px;padding:10px;}
+  .log div{padding:2px 0;}
+
+  /* ============================================================
+     FLOATING BUTTON (overlay)
+     ============================================================ */
+  #ytsSyncBtn{
+    position:fixed;right:24px;bottom:24px;z-index:9999;
+    width:64px;height:64px;border-radius:50%;
+    background:var(--surface-2);color:var(--text);border:2px solid var(--border);
+    box-shadow:var(--shadow);
+    display:flex;align-items:center;justify-content:center;
+    transition:background .35s ease,border-color .35s ease,transform .25s ease,box-shadow .35s ease;
+  }
+  #ytsSyncBtn svg{width:26px;height:26px;}
+  #ytsSyncBtn:hover{transform:translateY(-2px) scale(1.04);}
+  #ytsSyncBtn.active{
+    background:var(--accent);border-color:var(--accent-dim);color:#06210f;
+    box-shadow:0 0 0 0 rgba(29,185,84,.6),var(--shadow);
+    animation:pulse 2.4s ease-in-out infinite;
+  }
+  #ytsSyncBtn.error-flash{animation:flashRed .6s ease;}
+  @keyframes pulse{
+    0%{box-shadow:0 0 0 0 rgba(29,185,84,.45),var(--shadow);}
+    70%{box-shadow:0 0 0 14px rgba(29,185,84,0),var(--shadow);}
+    100%{box-shadow:0 0 0 0 rgba(29,185,84,0),var(--shadow);}
+  }
+  @keyframes flashRed{
+    0%,100%{background:var(--accent);}
+    50%{background:var(--danger);}
+  }
+  #ytsSyncBtn .ring{
+    position:absolute;inset:-2px;border-radius:50%;pointer-events:none;
+  }
+  #ytsStatusBubble{
+    position:fixed;right:24px;bottom:96px;z-index:9998;
+    background:var(--surface);border:1px solid var(--border);border-radius:12px;
+    padding:10px 14px;font-size:12px;box-shadow:var(--shadow);
+    max-width:240px;display:none;color:var(--text-dim);
+  }
+  #ytsStatusBubble.show{display:block;animation:fadeUp .25s ease;}
+  @keyframes fadeUp{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:translateY(0);}}
+
+  /* ---------- toast notifications ---------- */
+  #ytsToasts{position:fixed;right:24px;bottom:170px;z-index:9999;display:flex;flex-direction:column-reverse;gap:8px;}
+  .toast{
+    background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--accent);
+    border-radius:10px;padding:10px 14px;font-size:13px;box-shadow:var(--shadow);
+    max-width:280px;animation:slideIn .25s ease, fadeOut .4s ease 3.6s forwards;
+  }
+  .toast.err{border-left-color:var(--danger);}
+  @keyframes slideIn{from{opacity:0;transform:translateX(20px);}to{opacity:1;transform:translateX(0);}}
+  @keyframes fadeOut{to{opacity:0;transform:translateX(20px);}}
+
+  /* ---------- modal ---------- */
+  .modal-backdrop{
+    position:fixed;inset:0;background:rgba(8,9,11,.55);backdrop-filter:blur(2px);
+    z-index:10000;display:none;align-items:center;justify-content:center;padding:20px;
+  }
+  .modal-backdrop.show{display:flex;animation:fadeIn .2s ease;}
+  @keyframes fadeIn{from{opacity:0;}to{opacity:1;}}
+  .modal{
+    background:var(--surface);border:1px solid var(--border);border-radius:18px;
+    width:100%;max-width:520px;max-height:84vh;overflow:auto;padding:26px;
+    box-shadow:var(--shadow);animation:modalIn .25s cubic-bezier(.2,.9,.3,1.2);
+  }
+  @keyframes modalIn{from{opacity:0;transform:translateY(14px) scale(.97);}to{opacity:1;transform:translateY(0) scale(1);}}
+  .modal h3{margin:0 0 4px;font-size:20px;}
+  .modal .sub{color:var(--text-dim);font-size:13px;margin-bottom:18px;}
+  .stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:18px;}
+  .stat{background:var(--surface-2);border-radius:12px;padding:14px;text-align:center;}
+  .stat .num{font-size:28px;font-weight:700;}
+  .stat.ok .num{color:var(--accent);}
+  .stat.bad .num{color:var(--danger);}
+  .stat .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-dim);margin-top:2px;}
+  .modal-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;margin-top:18px;}
+
+  ::-webkit-scrollbar{width:8px;height:8px;}
+  ::-webkit-scrollbar-thumb{background:var(--border);border-radius:8px;}
+
+  .topbar{position:fixed;top:16px;right:16px;z-index:9000;display:flex;gap:8px;}
+  .icon-btn{width:34px;height:34px;border-radius:50%;background:var(--surface);border:1px solid var(--border);
+    display:flex;align-items:center;justify-content:center;color:var(--text-dim);box-shadow:var(--shadow);}
+
+  code{background:var(--surface-2);padding:1px 5px;border-radius:5px;font-family:var(--font-mono);font-size:12px;}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <button class="icon-btn" id="themeToggle" title="Alternar tema">🌓</button>
+  <button class="icon-btn" id="infoToggle" title="Como funciona">❓</button>
+</div>
+
+<!-- ============================================================
+     "Host page" — simula uma página onde o overlay viveria
+     (em produção, este botão flutuante é injetado em qualquer
+     página, inclusive no próprio youtube.com).
+     ============================================================ -->
+<div class="host">
+  <h1>YT → Spotify Sync</h1>
+  <p class="lede">Overlay flutuante que sincroniza, em tempo real, as músicas tocadas no YouTube com uma playlist do Spotify. Configure a conexão com o Spotify abaixo e use o botão flutuante no canto da tela para ligar/desligar a sincronização.</p>
+
+  <div class="card" id="setupCard">
+    <h2>1 · Conectar ao Spotify</h2>
+    <div class="row" style="margin-bottom:10px;">
+      <div style="flex:1;min-width:220px;">
+        <label for="clientIdInput">Spotify Client ID (OAuth · PKCE)</label>
+        <input type="text" id="clientIdInput" placeholder="ex: 8f3a2c1b9e4d4a2f9b1c0a7e5d6f3b2c">
+      </div>
+      <div>
+        <label>&nbsp;</label>
+        <button class="primary" id="connectBtn">Conectar com Spotify</button>
+      </div>
+    </div>
+    <div class="row" id="connStatusRow">
+      <span class="pill idle" id="connPill">Não conectado</span>
+      <span class="muted" id="connUser"></span>
+    </div>
+  </div>
+
+  <div class="card" id="playlistCard" style="display:none;">
+    <h2>2 · Playlist de destino</h2>
+    <div class="row">
+      <div style="flex:1;min-width:220px;">
+        <label for="playlistSelect">Adicionar músicas em</label>
+        <select id="playlistSelect"></select>
+      </div>
+      <div>
+        <label>&nbsp;</label>
+        <button class="ghost" id="refreshPlaylistsBtn">Atualizar lista</button>
+      </div>
+    </div>
+    <div class="row" style="margin-top:12px;">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+        <input type="checkbox" id="skipDuplicates" checked style="width:auto;"> Ignorar músicas duplicadas
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+        <input type="checkbox" id="musicOnly" checked style="width:auto;"> Sincronizar apenas vídeos de música
+      </label>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>4 · Extensão de navegador (produção)</h2>
+    <p class="muted" style="margin-top:-4px;">Instale a extensão em <code>extension/</code>, cole os dados abaixo na tela de configuração dela e clique no botão flutuante dentro do youtube.com para enviar a música tocando de verdade — sem precisar do simulador.</p>
+    <div class="row" style="margin-bottom:10px;">
+      <div style="flex:1;min-width:160px;">
+        <label>Porta local</label>
+        <input type="text" id="pairingPort" readonly>
+      </div>
+      <div style="flex:2;min-width:220px;">
+        <label>Token de pareamento</label>
+        <input type="text" id="pairingToken" readonly>
+      </div>
+    </div>
+    <div class="row">
+      <button class="ghost" id="copyPairingBtn">Copiar dados</button>
+      <button class="ghost" id="regenPairingBtn">Gerar novo token</button>
+      <span class="pill idle" id="bridgePill">Servidor local: —</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>3 · Simulador do YouTube (modo demo)</h2>
+    <p class="muted" style="margin-top:-4px;">Uma página web comum não consegue ler a aba do YouTube por restrição de segurança do navegador (cross-origin). Em produção este módulo recebe eventos de uma <strong>extensão de navegador</strong> (content script rodando em youtube.com) via o servidor local descrito no card acima. Aqui você pode simular manualmente uma música "tocando" para testar todo o fluxo de sincronização.</p>
+    <div class="yt-mock" style="margin-bottom:12px;">
+      <div class="yt-thumb">▶</div>
+      <div class="yt-meta">
+        <div class="title" id="mockTitleDisplay">Nenhum vídeo "tocando"</div>
+        <div class="channel" id="mockChannelDisplay">—</div>
+      </div>
+    </div>
+    <div class="row">
+      <div style="flex:1;min-width:160px;"><label>Título do vídeo</label><input type="text" id="mockTitle" placeholder="Artista - Nome da Música (Official Video)"></div>
+      <div style="flex:1;min-width:160px;"><label>Canal</label><input type="text" id="mockChannel" placeholder="Nome do Canal - Topic"></div>
+    </div>
+    <div class="row" style="margin-top:10px;">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+        <input type="checkbox" id="mockIsMusic" checked style="width:auto;"> Categoria "Música" no YouTube
+      </label>
+      <button class="primary" id="simulatePlayBtn">▶ Simular reprodução</button>
+      <span class="pill idle" id="syncEnginePill">Sync desligado</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Atividade da sessão</h2>
+    <div class="log" id="activityLog"><div class="muted">Aguardando eventos…</div></div>
+  </div>
+
+  <div class="card">
+    <h2>Histórico de sincronizações</h2>
+    <table id="historyTable">
+      <thead><tr><th>Data</th><th>Adicionadas</th><th>Não encontradas</th></tr></thead>
+      <tbody><tr><td colspan="3" class="muted">Nenhuma sessão encerrada ainda.</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ============================================================
+     OVERLAY: botão flutuante + bolha de status + toasts
+     ============================================================ -->
+<div id="ytsStatusBubble"></div>
+<div id="ytsToasts"></div>
+<button id="ytsSyncBtn" title="Ativar sincronização YT → Spotify" aria-pressed="false">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <polygon points="5 3 19 12 5 21 5 3"></polygon>
+  </svg>
+</button>
+
+<!-- ============================================================
+     MODAL: resumo de encerramento da sessão
+     ============================================================ -->
+<div class="modal-backdrop" id="summaryModal">
+  <div class="modal">
+    <h3>Sincronização encerrada</h3>
+    <div class="sub" id="summaryWhen"></div>
+    <div class="stat-grid">
+      <div class="stat ok"><div class="num" id="summaryAdded">0</div><div class="lbl">Adicionadas</div></div>
+      <div class="stat bad"><div class="num" id="summaryMissed">0</div><div class="lbl">Não encontradas</div></div>
+    </div>
+    <div id="summaryMissedSection" style="display:none;">
+      <h2 style="margin-bottom:8px;">Vídeos não encontrados</h2>
+      <table>
+        <thead><tr><th>Vídeo</th><th>Canal</th><th>Horário</th></tr></thead>
+        <tbody id="summaryMissedBody"></tbody>
+      </table>
+    </div>
+    <div class="modal-actions">
+      <button class="ghost" id="copyMissedBtn">Copiar lista</button>
+      <button class="ghost" id="exportJsonBtn">Exportar JSON</button>
+      <button class="ghost" id="exportCsvBtn">Exportar CSV</button>
+      <button class="primary" id="closeSummaryBtn">Fechar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================
+     MODAL: informações / como conectar de verdade
+     ============================================================ -->
+<div class="modal-backdrop" id="infoModal">
+  <div class="modal">
+    <h3>Como este overlay funciona</h3>
+    <div class="sub">Arquitetura real de produção</div>
+    <p style="font-size:14px;line-height:1.6;">
+      Este aplicativo desktop (Electron) implementa a interface completa, o módulo de autenticação OAuth 2.0 + PKCE
+      do Spotify, a busca e adição de faixas via API oficial, o tratamento de erros e o relatório de sessão —
+      tudo pronto para uso real. O login com o Spotify abre uma janela dentro do próprio app; a troca do código
+      por tokens acontece no processo principal do Electron, então nada disso passa pelo navegador do sistema.
+    </p>
+    <p style="font-size:14px;line-height:1.6;">
+      A única peça que o app não pode fazer sozinho é ler o conteúdo da aba do YouTube em outro processo/navegador.
+      Para isso, em produção, este mesmo botão flutuante seria acionado por uma <strong>extensão de navegador</strong>
+      (Chrome/Edge/Firefox) cujo <em>content script</em> roda dentro de youtube.com, lê o título do vídeo/artista a
+      partir do player e envia o evento para este app — exatamente a função que o botão "Simular reprodução" chama
+      aqui no modo demo.
+    </p>
+    <p style="font-size:14px;line-height:1.6;">
+      Cole seu <strong>Client ID</strong> do Spotify (criado em developer.spotify.com) para testar o fluxo de
+      autenticação e adição de faixas de verdade. Cadastre <code>http://127.0.0.1:8888/callback</code> como
+      Redirect URI nas configurações do seu app no painel do Spotify.
+    </p>
+    <div class="modal-actions"><button class="primary" id="closeInfoBtn">Entendi</button></div>
+  </div>
+</div>
+
+<script>
+/* =====================================================================
+   YT → SPOTIFY SYNC — aplicação modular em JS puro (ES6+)
+   Módulos:
+     - Logger          : log central de eventos/erros
+     - Storage          : persistência (localStorage) de config/histórico
+     - SpotifyAuth      : OAuth 2.0 Authorization Code + PKCE
+     - SpotifyAPI        : busca de faixas / playlists / adição de itens
+     - YouTubeMonitor    : ponto de entrada para eventos de "música tocando"
+                            (alimentado por extensão real ou pelo simulador)
+     - SyncEngine        : orquestra monitor -> busca -> playlist -> log
+     - UI                : botão flutuante, toasts, modais, tema
+   ===================================================================== */
+(() => {
+  'use strict';
+
+  const REDIRECT_URI = window.location.href.split('#')[0].split('?')[0];
+  const SPOTIFY_SCOPES = [
+    'playlist-modify-public',
+    'playlist-modify-private',
+    'playlist-read-private',
+    'user-read-private'
+  ].join(' ');
+
+  /* ---------------------------------------------------------------
+     Logger — log central, também usado para mostrar atividade na UI
+     --------------------------------------------------------------- */
+  const Logger = (() => {
+    const listeners = [];
+    function log(level, msg, data) {
+      const entry = { level, msg, data, ts: new Date() };
+      listeners.forEach(fn => fn(entry));
+      const tag = level === 'error' ? '[ERRO]' : level === 'warn' ? '[AVISO]' : '[INFO]';
+      console.log(tag, msg, data || '');
+      return entry;
+    }
+    return {
+      info: (m, d) => log('info', m, d),
+      warn: (m, d) => log('warn', m, d),
+      error: (m, d) => log('error', m, d),
+      onLog: (fn) => listeners.push(fn)
+    };
+  })();
+
+  /* ---------------------------------------------------------------
+     Storage — config persistente e histórico de sessões
+     --------------------------------------------------------------- */
+  const Storage = (() => {
+    const KEYS = {
+      verifier: 'yts_pkce_verifier',
+      tokens: 'yts_spotify_tokens',
+      config: 'yts_config',
+      history: 'yts_history'
+    };
+    const get = (k, fallback) => {
+      try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : fallback; }
+      catch { return fallback; }
+    };
+    const set = (k, v) => localStorage.setItem(k, JSON.stringify(v));
+    return {
+      KEYS,
+      getTokens: () => get(KEYS.tokens, null),
+      setTokens: (t) => set(KEYS.tokens, t),
+      getConfig: () => get(KEYS.config, { playlistId: null, skipDuplicates: true, musicOnly: true }),
+      setConfig: (c) => set(KEYS.config, c),
+      getHistory: () => get(KEYS.history, []),
+      pushHistory: (entry) => { const h = get(KEYS.history, []); h.unshift(entry); set(KEYS.history, h.slice(0, 50)); return h; },
+      setVerifier: (v) => sessionStorage.setItem(KEYS.verifier, v),
+      getVerifier: () => sessionStorage.getItem(KEYS.verifier)
+    };
+  })();
+
+  /* ---------------------------------------------------------------
+     SpotifyAuth — OAuth 2.0 Authorization Code Flow with PKCE
+     (não exige client secret; seguro para apps 100% client-side)
+     --------------------------------------------------------------- */
+  const SpotifyAuth = (() => {
+    // No app de desktop o login acontece numa BrowserWindow controlada pelo
+    // processo principal do Electron (veja main.js). PKCE, abertura da janela
+    // de autorização e troca do code por tokens também rodam lá, porque o
+    // endpoint accounts.spotify.com/api/token não libera CORS para origens
+    // file:// — fazer isso no processo principal evita esse problema.
+
+    async function beginLogin(clientId) {
+      if (!window.electronAPI) throw new Error('API do Electron indisponível.');
+      try {
+        const tokens = await window.electronAPI.spotifyLogin(clientId);
+        tokens.client_id = clientId;
+        Storage.setTokens(tokens);
+        return true;
+      } catch (e) {
+        Logger.error('Erro no login com Spotify', e.message);
+        throw new Error('Falha ao conectar com o Spotify: ' + e.message);
+      }
+    }
+
+    // Mantido apenas por compatibilidade com o bootstrap da página;
+    // não há mais redirect de URL para resolver no app de desktop.
+    async function handleRedirectIfPresent() { return false; }
+
+    async function refreshIfNeeded() {
+      const tokens = Storage.getTokens();
+      if (!tokens) return null;
+      const expiresAt = tokens.obtained_at + (tokens.expires_in * 1000);
+      if (Date.now() < expiresAt - 60000) return tokens.access_token;
+      if (!tokens.refresh_token) return tokens.access_token;
+
+      try {
+        const fresh = await window.electronAPI.spotifyRefresh({
+          client_id: tokens.client_id,
+          refresh_token: tokens.refresh_token
+        });
+        const merged = { ...tokens, ...fresh, obtained_at: Date.now() };
+        if (!merged.refresh_token) merged.refresh_token = tokens.refresh_token;
+        Storage.setTokens(merged);
+        return merged.access_token;
+      } catch (e) {
+        Logger.error('Erro renovando token Spotify', e.message);
+        return null;
+      }
+    }
+
+    function isConnected() { return !!Storage.getTokens(); }
+    function logout() { localStorage.removeItem(Storage.KEYS.tokens); }
+
+    return { beginLogin, handleRedirectIfPresent, refreshIfNeeded, isConnected, logout };
+  })();
+
+  /* ---------------------------------------------------------------
+     SpotifyAPI — chamadas REST oficiais (search, playlists, add item)
+     --------------------------------------------------------------- */
+  const SpotifyAPI = (() => {
+    // Todas as chamadas à Spotify Web API passam pelo processo principal do Electron
+    // via IPC (window.electronAPI.spotifyFetch), eliminando o problema de CORS que
+    // aconteceria se chamássemos direto do renderer (origem file://).
+    const PLAYLIST_CACHE_KEY = 'yts_playlists_cache';
+    const PLAYLIST_CACHE_TTL = 5 * 60 * 1000; // 5 minutos
+
+    async function authedFetch(path, method = 'GET', body = undefined) {
+      const token = await SpotifyAuth.refreshIfNeeded();
+      if (!token) throw new Error('Sem token Spotify válido');
+      return window.electronAPI.spotifyFetch({ path, method, body, token });
+    }
+
+    async function getMe() { return authedFetch('/me'); }
+
+    async function getMyPlaylists(forceRefresh = false) {
+      if (!forceRefresh) {
+        try {
+          const raw = localStorage.getItem(PLAYLIST_CACHE_KEY);
+          if (raw) {
+            const { ts, items } = JSON.parse(raw);
+            if (Date.now() - ts < PLAYLIST_CACHE_TTL) return items;
+          }
+        } catch {}
+      }
+      const data = await authedFetch('/me/playlists?limit=50');
+      const items = (data && data.items) ? data.items.filter(p => p && p.id) : [];
+      localStorage.setItem(PLAYLIST_CACHE_KEY, JSON.stringify({ ts: Date.now(), items }));
+      return items;
+    }
+
+    // Limpa "(Official Video)", "[Lyrics]", "- Topic" etc. para melhorar o match de busca
+    function cleanQueryFromYouTube(title, channel) {
+      let t = title
+        .replace(/\(.*?(official|lyrics?|audio|video|hd|4k|mv).*?\)/gi, '')
+        .replace(/\[.*?(official|lyrics?|audio|video|hd|4k|mv).*?\]/gi, '')
+        .replace(/official\s*(music\s*)?video/gi, '')
+        .replace(/lyrics?/gi, '')
+        .trim();
+      const artist = (channel || '').replace(/\s*-\s*topic$/i, '').trim();
+      if (t.includes(' - ')) return t;
+      return artist ? `${artist} - ${t}` : t;
+    }
+
+    // Normaliza texto para comparação: minúsculas, sem acentos, sem pontuação
+    function normalize(s) {
+      return (s || '')
+        .toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // remove acentos
+        .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+        .split(/\s+/)
+        .filter(Boolean);
+    }
+
+    // Compara a busca original (título+canal do YouTube) com um candidato do
+    // Spotify (nome da faixa + artistas) e retorna um score de 0 a 1 baseado
+    // na fração de palavras da busca que aparecem no candidato. Isso evita
+    // aceitar cegamente o primeiro resultado da busca textual do Spotify,
+    // que pode ser irrelevante quando a faixa não existe lá.
+    function matchScore(queryWords, candidate) {
+      const candWords = new Set(normalize(`${candidate.name} ${candidate.artists.map(a => a.name).join(' ')}`));
+      if (!queryWords.length || !candWords.size) return 0;
+      const hits = queryWords.filter(w => w.length > 1 && candWords.has(w)).length;
+      return hits / queryWords.length;
+    }
+
+    const MIN_MATCH_SCORE = 0.4; // pelo menos 40% das palavras da busca precisam bater
+
+    async function searchTrack(title, channel) {
+      const q = cleanQueryFromYouTube(title, channel);
+      const queryWords = normalize(q);
+      if (!queryWords.length) return null; // busca vazia/sem sentido: nem tenta
+
+      const params = new URLSearchParams({ q, type: 'track', limit: '5' });
+      const data = await authedFetch(`/search?${params.toString()}`);
+      const items = data.tracks && data.tracks.items;
+      if (!items || !items.length) return null;
+
+      // Escolhe o melhor candidato entre os resultados, não simplesmente o primeiro
+      let best = null;
+      let bestScore = 0;
+      for (const item of items) {
+        const score = matchScore(queryWords, item);
+        if (score > bestScore) { best = item; bestScore = score; }
+      }
+
+      if (!best || bestScore < MIN_MATCH_SCORE) {
+        Logger.warn('Melhor resultado do Spotify não bateu com a busca (ignorado)', {
+          query: q,
+          bestCandidate: best ? `${best.artists.map(a => a.name).join(', ')} - ${best.name}` : null,
+          score: bestScore
+        });
+        return null;
+      }
+      return best;
+    }
+
+    // Desde a migração de fevereiro/2026, o Spotify renomeou os endpoints de
+    // playlist de /tracks para /items (o antigo /tracks passou a devolver
+    // 403 Forbidden sem aviso). GET /playlists/{id}/items só retorna o
+    // conteúdo para playlists que o usuário é dono ou colaborador.
+    async function getPlaylistTrackUris(playlistId) {
+      try {
+        const data = await authedFetch(`/playlists/${playlistId}/items?limit=50`);
+        const items = (data && data.items && data.items.items) ? data.items.items : [];
+        return items.map(entry => entry.item && entry.item.uri).filter(Boolean);
+      } catch (e) {
+        Logger.warn('Não foi possível ler as faixas existentes da playlist', e.message);
+        return [];
+      }
+    }
+
+    async function addTrackToPlaylist(playlistId, trackUri) {
+      return authedFetch(`/playlists/${playlistId}/items`, 'POST', { uris: [trackUri] });
+    }
+
+    function clearPlaylistCache() { localStorage.removeItem(PLAYLIST_CACHE_KEY); }
+
+    return { getMe, getMyPlaylists, searchTrack, addTrackToPlaylist, getPlaylistTrackUris, clearPlaylistCache };
+  })();
+
+  /* ---------------------------------------------------------------
+     YouTubeMonitor — ponto único de entrada para eventos de reprodução.
+     Em produção: uma extensão de navegador injeta um content script em
+     youtube.com que detecta a faixa tocando e, quando o usuário aperta o
+     botão flutuante da extensão, faz um POST para o servidor HTTP local
+     do app (ver main.js, rota /event). O processo principal repassa o
+     evento para cá via IPC (window.electronAPI.onTrackEvent), chamando
+     reportTrack() — a mesma função que o botão "Simular reprodução"
+     usa no modo demo. O listener de postMessage abaixo é mantido só
+     como compatibilidade para testes feitos direto nesta página.
+     --------------------------------------------------------------- */
+  const YouTubeMonitor = (() => {
+    let active = false;
+    let lastReported = null; // evita reportar o mesmo vídeo 2x seguidas
+    const subscribers = [];
+
+    function start() { active = true; lastReported = null; }
+    function stop() { active = false; }
+
+    function reportTrack({ title, channel, isMusicCategory = true, videoId = null }) {
+      if (!active) return;
+      const key = `${title}|${channel}`;
+      if (key === lastReported) return; // dedupe consecutivo
+      lastReported = key;
+      subscribers.forEach(fn => fn({ title, channel, isMusicCategory, videoId, ts: new Date() }));
+    }
+
+    function onTrack(fn) { subscribers.push(fn); }
+
+    // Ponte para extensão real: window.postMessage({ type:'YTS_TRACK', payload:{...} })
+    window.addEventListener('message', (ev) => {
+      if (ev.data && ev.data.type === 'YTS_TRACK') reportTrack(ev.data.payload);
+    });
+
+    return { start, stop, reportTrack, onTrack, get isActive() { return active; } };
+  })();
+
+  /* ---------------------------------------------------------------
+     SyncEngine — orquestra: evento YouTube -> busca Spotify -> playlist
+     --------------------------------------------------------------- */
+  const SyncEngine = (() => {
+    let session = null; // { startedAt, added:[], missed:[] }
+    let playlistCache = new Set(); // uris já presentes na playlist (dedupe)
+
+    async function start() {
+      const cfg = Storage.getConfig();
+      if (!SpotifyAuth.isConnected()) throw new Error('Conecte sua conta Spotify primeiro.');
+      if (!cfg.playlistId) throw new Error('Selecione uma playlist de destino primeiro.');
+
+      session = { startedAt: new Date(), added: [], missed: [] };
+      playlistCache = new Set();
+      if (cfg.skipDuplicates) {
+        try { (await SpotifyAPI.getPlaylistTrackUris(cfg.playlistId)).forEach(u => playlistCache.add(u)); }
+        catch (e) { Logger.warn('Não foi possível pré-carregar faixas existentes', e.message); }
+      }
+
+      YouTubeMonitor.start();
+      Logger.info('Sincronização iniciada');
+      return session;
+    }
+
+    function stop() {
+      YouTubeMonitor.stop();
+      const finished = session;
+      session = null;
+      if (finished) {
+        Storage.pushHistory({
+          date: new Date().toISOString(),
+          added: finished.added.length,
+          missed: finished.missed.length,
+          missedList: finished.missed
+        });
+        Logger.info('Sincronização encerrada', { added: finished.added.length, missed: finished.missed.length });
+      }
+      return finished;
+    }
+
+    function isRunning() { return !!session; }
+
+    async function handleIncomingTrack(track) {
+      if (!session) return;
+      const cfg = Storage.getConfig();
+      if (cfg.musicOnly && !track.isMusicCategory) {
+        Logger.info('Vídeo ignorado (fora da categoria Música)', track.title);
+        return;
+      }
+      try {
+        const found = await SpotifyAPI.searchTrack(track.title, track.channel);
+        if (!found) {
+          session.missed.push({ title: track.title, channel: track.channel, ts: track.ts.toISOString() });
+          Logger.warn('Música não encontrada no Spotify', track.title);
+          UI.notify(`Não encontrada: ${track.title}`, true);
+          return;
+        }
+        if (cfg.skipDuplicates && playlistCache.has(found.uri)) {
+          Logger.info('Duplicada ignorada', found.name);
+          UI.notify(`Já está na playlist: ${found.name}`, false, true);
+          return;
+        }
+        await SpotifyAPI.addTrackToPlaylist(cfg.playlistId, found.uri);
+        playlistCache.add(found.uri);
+        const artistNames = found.artists.map(a => a.name).join(', ');
+        session.added.push({ title: found.name, artist: artistNames, ts: track.ts.toISOString() });
+        Logger.info('Adicionada à playlist', `${artistNames} - ${found.name}`);
+        UI.notify(`Adicionada: ${artistNames} - ${found.name}`);
+      } catch (e) {
+        session.missed.push({ title: track.title, channel: track.channel, ts: track.ts.toISOString(), error: e.message });
+        Logger.error('Erro ao processar faixa', e.message);
+        UI.notify(`Erro: ${track.title}`, true);
+      } finally {
+        UI.refreshLiveCounters(session);
+      }
+    }
+
+    YouTubeMonitor.onTrack(handleIncomingTrack);
+
+    return { start, stop, isRunning, get current() { return session; } };
+  })();
+
+  /* ---------------------------------------------------------------
+     UI — botão flutuante, toasts, modais, tema, ligação com formulário
+     --------------------------------------------------------------- */
+  const UI = (() => {
+    const $ = (id) => document.getElementById(id);
+    const btn = $('ytsSyncBtn');
+    const bubble = $('ytsStatusBubble');
+    const toasts = $('ytsToasts');
+
+    function setTheme(mode) {
+      document.documentElement.setAttribute('data-theme', mode);
+      localStorage.setItem('yts_theme', mode);
+    }
+    function initTheme() {
+      const saved = localStorage.getItem('yts_theme');
+      if (saved) setTheme(saved);
+      $('themeToggle').addEventListener('click', () => {
+        const cur = document.documentElement.getAttribute('data-theme') ||
+          (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        setTheme(cur === 'dark' ? 'light' : 'dark');
+      });
+    }
+
+    function notify(msg, isError = false, quiet = false) {
+      logActivity(msg, isError ? 'error' : 'info');
+      if (quiet) return;
+      const t = document.createElement('div');
+      t.className = 'toast' + (isError ? ' err' : '');
+      t.textContent = msg;
+      toasts.appendChild(t);
+      setTimeout(() => t.remove(), 4200);
+    }
+
+    function logActivity(msg, level = 'info') {
+      const log = $('activityLog');
+      if (log.firstElementChild && log.firstElementChild.classList.contains('muted') && log.children.length === 1) {
+        log.innerHTML = '';
+      }
+      const line = document.createElement('div');
+      const time = new Date().toLocaleTimeString('pt-BR');
+      line.style.color = level === 'error' ? 'var(--danger)' : level === 'warn' ? 'var(--warn)' : '';
+      line.textContent = `[${time}] ${msg}`;
+      log.prepend(line);
+    }
+    Logger.onLog((e) => { if (e.level !== 'info' || true) { /* já logamos via notify nos pontos chave */ } });
+
+    function setButtonState(active) {
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-pressed', String(active));
+      btn.title = active ? 'Sincronização ativa — clique para parar' : 'Ativar sincronização YT → Spotify';
+      $('syncEnginePill').textContent = active ? 'Sync ativo' : 'Sync desligado';
+      $('syncEnginePill').className = 'pill ' + (active ? 'ok' : 'idle');
+      showBubble(active ? 'Sincronização ativa. Tocando algo no YouTube? Use o simulador abaixo para testar.' : '');
+    }
+
+    function showBubble(text) {
+      if (!text) { bubble.classList.remove('show'); return; }
+      bubble.textContent = text;
+      bubble.classList.add('show');
+      clearTimeout(showBubble._t);
+      showBubble._t = setTimeout(() => bubble.classList.remove('show'), 4000);
+    }
+
+    function flashError() {
+      btn.classList.add('error-flash');
+      setTimeout(() => btn.classList.remove('error-flash'), 650);
+    }
+
+    function refreshLiveCounters(session) {
+      if (!session) return;
+      showBubble(`Adicionadas: ${session.added.length} · Não encontradas: ${session.missed.length}`);
+    }
+
+    /* ----- Modal de resumo ----- */
+    let lastSession = null;
+    function openSummary(session) {
+      lastSession = session;
+      $('summaryWhen').textContent = `Sessão de ${session.startedAt.toLocaleString('pt-BR')} até ${new Date().toLocaleString('pt-BR')}`;
+      $('summaryAdded').textContent = session.added.length;
+      $('summaryMissed').textContent = session.missed.length;
+      const body = $('summaryMissedBody');
+      body.innerHTML = '';
+      if (session.missed.length) {
+        $('summaryMissedSection').style.display = '';
+        session.missed.forEach(m => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `<td>${escapeHtml(m.title)}</td><td>${escapeHtml(m.channel || '—')}</td><td>${new Date(m.ts).toLocaleTimeString('pt-BR')}</td>`;
+          body.appendChild(tr);
+        });
+      } else {
+        $('summaryMissedSection').style.display = 'none';
+      }
+      $('summaryModal').classList.add('show');
+      renderHistory();
+    }
+    function closeSummary() { $('summaryModal').classList.remove('show'); }
+    function escapeHtml(s) { return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+    function exportMissed(format) {
+      if (!lastSession) return;
+      let content, mime, ext;
+      if (format === 'json') {
+        content = JSON.stringify(lastSession.missed, null, 2);
+        mime = 'application/json'; ext = 'json';
+      } else {
+        const rows = [['title', 'channel', 'timestamp'], ...lastSession.missed.map(m => [m.title, m.channel || '', m.ts])];
+        content = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
+        mime = 'text/csv'; ext = 'csv';
+      }
+      const blob = new Blob([content], { type: mime });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `nao_encontradas_${Date.now()}.${ext}`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+
+    async function copyMissed() {
+      if (!lastSession) return;
+      const text = lastSession.missed.map(m => `${m.title} — ${m.channel || ''} (${new Date(m.ts).toLocaleTimeString('pt-BR')})`).join('\n');
+      try { await navigator.clipboard.writeText(text || 'Nenhuma música pendente.'); notify('Lista copiada para a área de transferência.'); }
+      catch { notify('Não foi possível copiar automaticamente.', true); }
+    }
+
+    function renderHistory() {
+      const tbody = document.querySelector('#historyTable tbody');
+      const hist = Storage.getHistory();
+      if (!hist.length) { tbody.innerHTML = '<tr><td colspan="3" class="muted">Nenhuma sessão encerrada ainda.</td></tr>'; return; }
+      tbody.innerHTML = hist.map(h => `<tr><td>${new Date(h.date).toLocaleString('pt-BR')}</td><td>${h.added}</td><td>${h.missed}</td></tr>`).join('');
+    }
+
+    return {
+      initTheme, notify, setButtonState, flashError, refreshLiveCounters,
+      openSummary, closeSummary, exportMissed, copyMissed, renderHistory, logActivity
+    };
+  })();
+
+  /* =================================================================
+     BOOTSTRAP / wiring de eventos da página
+     ================================================================= */
+  document.addEventListener('DOMContentLoaded', async () => {
+    UI.initTheme();
+    UI.renderHistory();
+    await initPairingCard();
+
+    // Eventos reais vindos da extensão de navegador, via processo principal
+    if (window.electronAPI && window.electronAPI.onTrackEvent) {
+      window.electronAPI.onTrackEvent((track) => {
+        if (!YouTubeMonitor.isActive) {
+          UI.notify(`Recebido da extensão, mas a sincronização está desligada: ${track.title}`, true);
+          return;
+        }
+        YouTubeMonitor.reportTrack(track);
+      });
+    }
+
+    // Resolve eventual redirect do OAuth
+    const justConnected = await SpotifyAuth.handleRedirectIfPresent();
+    await refreshConnectionUI();
+    if (justConnected) UI.notify('Conectado ao Spotify com sucesso!');
+
+    document.getElementById('connectBtn').addEventListener('click', async () => {
+      const clientId = document.getElementById('clientIdInput').value.trim();
+      if (!clientId) { UI.notify('Informe seu Spotify Client ID.', true); return; }
+      const btn = document.getElementById('connectBtn');
+      btn.disabled = true;
+      try {
+        await SpotifyAuth.beginLogin(clientId);
+        UI.notify('Conectado ao Spotify com sucesso!');
+        await refreshConnectionUI();
+      } catch (e) {
+        UI.notify(e.message, true);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    document.getElementById('refreshPlaylistsBtn').addEventListener('click', () => loadPlaylists(true));
+
+    document.getElementById('playlistSelect').addEventListener('change', (e) => {
+      const cfg = Storage.getConfig();
+      cfg.playlistId = e.target.value || null;
+      Storage.setConfig(cfg);
+    });
+    document.getElementById('skipDuplicates').addEventListener('change', (e) => {
+      const cfg = Storage.getConfig(); cfg.skipDuplicates = e.target.checked; Storage.setConfig(cfg);
+    });
+    document.getElementById('musicOnly').addEventListener('change', (e) => {
+      const cfg = Storage.getConfig(); cfg.musicOnly = e.target.checked; Storage.setConfig(cfg);
+    });
+
+    // Pré-popula checkboxes com config salva
+    const cfg0 = Storage.getConfig();
+    document.getElementById('skipDuplicates').checked = cfg0.skipDuplicates;
+    document.getElementById('musicOnly').checked = cfg0.musicOnly;
+
+    // Simulador YouTube
+    document.getElementById('simulatePlayBtn').addEventListener('click', () => {
+      const title = document.getElementById('mockTitle').value.trim();
+      const channel = document.getElementById('mockChannel').value.trim();
+      // Antes, campos vazios caíam num texto fixo ("Artista Desconhecido - Faixa
+      // Sem Título"), que às vezes batia por coincidência com uma música real no
+      // Spotify (ex.: "Faixa Amarela") e era adicionada por engano à playlist.
+      // Agora exigimos que o título seja preenchido antes de simular.
+      if (!title) {
+        UI.notify('Preencha o título do vídeo antes de simular (deixe vazio só se quiser testar "não encontrada").', true);
+        return;
+      }
+      const isMusicCategory = document.getElementById('mockIsMusic').checked;
+      document.getElementById('mockTitleDisplay').textContent = title;
+      document.getElementById('mockChannelDisplay').textContent = channel || '(sem canal informado)';
+      if (!YouTubeMonitor.isActive) { UI.notify('Ative a sincronização (botão flutuante) antes de simular.', true); return; }
+      YouTubeMonitor.reportTrack({ title, channel, isMusicCategory });
+    });
+
+    // Botão flutuante: liga/desliga
+    document.getElementById('ytsSyncBtn').addEventListener('click', async () => {
+      if (!SyncEngine.isRunning()) {
+        try {
+          await SyncEngine.start();
+          UI.setButtonState(true);
+        } catch (e) {
+          UI.notify(e.message, true);
+          UI.flashError();
+        }
+      } else {
+        const session = SyncEngine.stop();
+        UI.setButtonState(false);
+        if (session) UI.openSummary(session);
+      }
+    });
+
+    // Modal handlers
+    document.getElementById('closeSummaryBtn').addEventListener('click', UI.closeSummary);
+    document.getElementById('exportJsonBtn').addEventListener('click', () => UI.exportMissed('json'));
+    document.getElementById('exportCsvBtn').addEventListener('click', () => UI.exportMissed('csv'));
+    document.getElementById('copyMissedBtn').addEventListener('click', UI.copyMissed);
+    document.getElementById('infoToggle').addEventListener('click', () => document.getElementById('infoModal').classList.add('show'));
+    document.getElementById('closeInfoBtn').addEventListener('click', () => document.getElementById('infoModal').classList.remove('show'));
+    [document.getElementById('summaryModal'), document.getElementById('infoModal')].forEach(m => {
+      m.addEventListener('click', (e) => { if (e.target === m) m.classList.remove('show'); });
+    });
+  });
+
+  async function initPairingCard() {
+    if (!window.electronAPI || !window.electronAPI.getPairingInfo) return;
+    const portInput = document.getElementById('pairingPort');
+    const tokenInput = document.getElementById('pairingToken');
+    const pill = document.getElementById('bridgePill');
+
+    async function refresh() {
+      try {
+        const { port, token } = await window.electronAPI.getPairingInfo();
+        portInput.value = port;
+        tokenInput.value = token;
+        try {
+          const res = await fetch(`http://127.0.0.1:${port}/health`);
+          pill.textContent = res.ok ? 'Servidor local: ativo' : 'Servidor local: com erro';
+          pill.className = 'pill ' + (res.ok ? 'ok' : 'bad');
+        } catch {
+          pill.textContent = 'Servidor local: indisponível';
+          pill.className = 'pill bad';
+        }
+      } catch (e) {
+        Logger.error('Erro obtendo dados de pareamento', e.message);
+      }
+    }
+
+    document.getElementById('copyPairingBtn').addEventListener('click', async () => {
+      const text = `Porta: ${portInput.value}\nToken: ${tokenInput.value}`;
+      try { await navigator.clipboard.writeText(text); UI.notify('Dados de pareamento copiados.'); }
+      catch { UI.notify('Não foi possível copiar automaticamente.', true); }
+    });
+
+    document.getElementById('regenPairingBtn').addEventListener('click', async () => {
+      await window.electronAPI.regeneratePairingToken();
+      await refresh();
+      UI.notify('Novo token gerado. Atualize a extensão com o novo valor.');
+    });
+
+    await refresh();
+  }
+
+  async function refreshConnectionUI() {
+    const pill = document.getElementById('connPill');
+    const userSpan = document.getElementById('connUser');
+    if (SpotifyAuth.isConnected()) {
+      pill.textContent = 'Conectado';
+      pill.className = 'pill ok';
+      document.getElementById('playlistCard').style.display = '';
+      try {
+        const me = await SpotifyAPI.getMe();
+        userSpan.textContent = `como ${me.display_name || me.id}`;
+        await loadPlaylists();
+      } catch (e) {
+        Logger.error('Falha ao obter perfil Spotify', e.message);
+        UI.notify('Sessão Spotify expirada, reconecte-se.', true);
+      }
+    } else {
+      pill.textContent = 'Não conectado';
+      pill.className = 'pill idle';
+      document.getElementById('playlistCard').style.display = 'none';
+    }
+  }
+
+  async function loadPlaylists(forceRefresh = false) {
+    try {
+      const playlists = await SpotifyAPI.getMyPlaylists(forceRefresh);
+      const select = document.getElementById('playlistSelect');
+      const cfg = Storage.getConfig();
+      select.innerHTML = playlists.map(p => `<option value="${p.id}">${escapeOpt(p.name)} (${p.items ? p.items.total : (p.tracks ? p.tracks.total : '?')} faixas)</option>`).join('');
+      if (cfg.playlistId && playlists.some(p => p.id === cfg.playlistId)) {
+        select.value = cfg.playlistId;
+      } else if (playlists[0]) {
+        cfg.playlistId = playlists[0].id;
+        Storage.setConfig(cfg);
+        select.value = playlists[0].id;
+      }
+    } catch (e) {
+      Logger.error('Erro carregando playlists', e.message);
+      UI.notify('Não foi possível carregar suas playlists.', true);
+    }
+  }
+  function escapeOpt(s) { return (s || '').replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c])); }
+
+  // Expõe API pública para uma futura extensão de navegador injetar eventos reais
+  window.YTS = { YouTubeMonitor, SyncEngine, SpotifyAuth, SpotifyAPI, Storage, Logger };
+})();
+</script>
+</body>
+</html>
