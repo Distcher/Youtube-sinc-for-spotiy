@@ -34,7 +34,6 @@ function createMainWindow() {
     }
   });
   mainWindow.loadFile(path.join(__dirname, 'app', 'index.html'));
-  mainWindow.webContents.openDevTools();
   mainWindow.setMenuBarVisibility(false);
 }
 
